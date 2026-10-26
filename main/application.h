@@ -152,6 +152,8 @@ private:
     bool startup_completed_ = false;
     bool pending_startup_wake_word_hint_ = false;
     bool aborted_ = false;
+    bool music_playing_ = false;
+    std::string music_name_;
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
@@ -177,6 +179,7 @@ private:
     void HideStartupWakeWordHint();
     void StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles);
     void StopNotification();
+    void StopMusic();
     void HandleNotificationFinished(uint32_t playback_id, bool success);
 
     // Activation task (runs in background)

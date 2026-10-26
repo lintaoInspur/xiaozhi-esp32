@@ -665,6 +665,26 @@ void Application::InitializeProtocol() {
                     });
                 }
             }
+        } else if (strcmp(type->valuestring, "music") == 0) {
+            auto state = cJSON_GetObjectItem(root, "state");
+            if (cJSON_IsString(state)) {
+                if (strcmp(state->valuestring, "start") == 0) {
+                    auto name = cJSON_GetObjectItem(root, "name");
+                    std::string title = (name && cJSON_IsString(name)) ? name->valuestring : "";
+                    Schedule([this, title]() {
+                        music_playing_ = true;
+                        music_name_ = title;
+                        aborted_ = false;
+                        SetDeviceState(kDeviceStateSpeaking);
+                        auto* display = Board::GetInstance().GetDisplay();
+                        if (display != nullptr && !music_name_.empty()) {
+                            display->SetChatMessage("assistant", music_name_.c_str());
+                        }
+                    });
+                } else if (strcmp(state->valuestring, "stop") == 0) {
+                    Schedule([this]() { StopMusic(); });
+                }
+            }
         } else if (strcmp(type->valuestring, "stt") == 0) {
             auto text = cJSON_GetObjectItem(root, "text");
             if (cJSON_IsString(text)) {
@@ -1232,6 +1252,18 @@ void Application::StopNotification() {
     board.GetDisplay()->SetChatMessage("assistant", "");
     board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
     if (GetDeviceState() == kDeviceStateNotifying) {
+        SetDeviceState(kDeviceStateIdle);
+    }
+}
+
+void Application::StopMusic() {
+    if (!music_playing_ && GetDeviceState() != kDeviceStateSpeaking) {
+        return;
+    }
+    music_playing_ = false;
+    // Discard any buffered audio so playback stops promptly.
+    audio_service_.ResetDecoder();
+    if (GetDeviceState() == kDeviceStateSpeaking) {
         SetDeviceState(kDeviceStateIdle);
     }
 }

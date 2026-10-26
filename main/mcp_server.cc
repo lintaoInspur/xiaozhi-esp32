@@ -324,6 +324,14 @@ void McpServer::AddUserOnlyTools() {
                         settings.SetString("download_url", url);
                         return true;
                     });
+
+    // Music playback control
+    AddUserOnlyTool("self.music.stop", "Stop playing the current music stream", PropertyList(),
+                    [this](const PropertyList& properties) -> ReturnValue {
+                        auto& app = Application::GetInstance();
+                        app.Schedule([&app]() { app.StopMusic(); });
+                        return true;
+                    });
 }
 
 void McpServer::AddTool(std::unique_ptr<McpTool> tool) {
