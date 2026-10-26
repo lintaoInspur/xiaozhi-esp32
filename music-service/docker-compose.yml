@@ -1,32 +1,49 @@
-# XiaoZhi music streaming stack.
+# XiaoZhi 全栈编排（AI 对话 + 本地音乐）
 #
-# Bring up with:  docker compose up -d
-# Then point the device's websocket URL at:  ws://<host>:8800/
-# Control it with:
-#   curl -X POST http://<host>:8800/play -d '{"url":"/music/song.mp3","name":"Song"}'
-#   curl -X POST http://<host>:8800/stop
-#   curl http://<host>:8800/list
+# 设备 WebSocket 只指向 xiaozhi-server： ws://<盒子IP>:8000/xiaozhi/v1/
+#   - xiaozhi-server 负责 AI 对话 / MCP / TTS（LLM 用 Qwen，见 SETUP.md 9.3）
+#   - music-service 作为内部转码后端，不直接连设备；
+#     xiaozhi-server 收到“放歌”指令后，拉取 http://music-service:8800/opus_stream
+#     并把 Opus 帧代发到设备同一条连接（集成代码见 SETUP.md 9.5）
+#
+# 使用前先在同级目录克隆服务端（构建上下文用）：
+#   cd .. && git clone https://github.com/xinnan-tech/xiaozhi-esp32-server.git
+#
+# 启动： docker compose up -d --build
+# 控制台： http://<盒子IP>:8002
+#
+# 说明：xiaozhi-server 的构建上下文/镜像随版本变化，请以官方仓库 docker-compose 为准；
+#       若官方提供镜像，把下面的 build 换成 image 即可。
+
+networks:
+  xiaozhi-net:
+    driver: bridge
 
 services:
   music-service:
     build: .
     image: xiaozhi-music-service
-    ports:
-      - "8800:8800"
+    # 不对外暴露设备 WS；仅在内部网络给 xiaozhi-server 拉流
+    expose:
+      - "8800"
     volumes:
-      # Mount your local music library here (read-only).
       - ./music:/music:ro
+    networks: [xiaozhi-net]
     restart: unless-stopped
 
-  # Self-hosted XiaoZhi server (LLM / MCP / conversation). This is where the
-  # device normally connects. To use music-service you can either:
-  #   (a) point the device's websocket URL directly at music-service above, or
-  #   (b) integrate music-service behind xiaozhi-server (server-side work).
-  # Uncomment and set the correct image/tag for your setup:
-  # xiaozhi-server:
-  #   image: <your-xiaozhi-server-image>
-  #   ports:
-  #     - "8000:8000"
-  #   volumes:
-  #     - ./server-data:/data
-  #   restart: unless-stopped
+  xiaozhi-server:
+    # 方式一：从本地克隆源码构建
+    build: ../xiaozhi-esp32-server/main/xiaozhi-server
+    # 方式二：若官方提供镜像，改为此并删掉上面的 build
+    # image: <official-xiaozhi-server-image>
+    ports:
+      - "8000:8000"   # 设备 WebSocket
+      - "8002:8002"   # 智控台
+      - "8003:8003"   # 视觉分析
+      - "8004:8004"   # MCP 接入点
+    volumes:
+      - ../xiaozhi-esp32-server/main/xiaozhi-server/data:/app/data
+      - ../xiaozhi-esp32-server/main/xiaozhi-server/models:/app/models
+    networks: [xiaozhi-net]
+    depends_on: [music-service]
+    restart: unless-stopped

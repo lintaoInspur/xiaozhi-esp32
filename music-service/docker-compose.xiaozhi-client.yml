@@ -1,0 +1,40 @@
+# XiaoZhi Client 全栈编排（AI 对话 + 本地音乐）
+#
+# 设备 WebSocket 只指向 xiaozhi-client 后端设备端口（见 SETUP-xiaozhi-client.md 3.2，通常为 3000）。
+#   - xiaozhi-client 后端：ASR/LLM(Qwen)/TTS + MCP，并代发音乐 Opus 到设备同一条连接
+#   - music-service：内部转码后端，不直接连设备；仅 xiaozhi-client 在内部网络拉流
+#
+# 启动： docker compose -f docker-compose.xiaozhi-client.yml up -d --build
+# Web UI： http://<盒子IP>:9999
+#
+# ⚠️ xiaozhi-client 的设备端口/服务名以官方 docker-compose.yml 为准；
+#    若官方镜像标签或端口不同，请相应调整下面 ports。
+
+networks:
+  xiaozhi-net:
+    driver: bridge
+
+services:
+  xiaozhi-client:
+    image: shenjingnan/xiaozhi-client:latest
+    container_name: xiaozhi-client
+    restart: unless-stopped
+    ports:
+      - "9999:9999"   # Web UI
+      - "3000:3000"   # 后端 / 设备 WebSocket 端口（⚠️ 以官方 compose 核实）
+    volumes:
+      - ./xiaozhi-client-data:/workspaces
+    environment:
+      - NODE_ENV=production
+      - XIAOZHI_WORKSPACE=/workspaces
+      - XIAOZHI_CONTAINER=true
+
+  music-service:
+    build: .
+    image: xiaozhi-music-service
+    expose:
+      - "8800"
+    volumes:
+      - ./music:/music:ro
+    networks: [xiaozhi-net]
+    restart: unless-stopped

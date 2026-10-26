@@ -321,6 +321,77 @@ class MusicService:
             },
         )
 
+    async def opus_stream_handler(self, request: web.Request) -> web.StreamResponse:
+        """Backend endpoint for xiaozhi-server integration.
+
+        Streams raw Opus packets (one per chunk) for ``url`` so that the
+        conversation server can pull frames and forward them to the device over
+        the *same* WebSocket connection it already owns. The server is
+        responsible for sending ``music start`` / ``music stop`` JSON and for
+        pacing/timestamping the frames (BinaryProtocol2/3 wrapping).
+        """
+        url = request.query.get("url")
+        if not url:
+            return web.Response(status=400, text="missing url")
+        src = self._resolve_source(url)
+        if src is None:
+            return web.Response(status=404, text="cannot resolve source")
+
+        resp = web.StreamResponse(
+            headers={"Content-Type": "application/octet-stream"}
+        )
+        await resp.prepare(request)
+
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            src,
+            "-f",
+            "s16le",
+            "-ar",
+            str(OPUS_SAMPLE_RATE),
+            "-ac",
+            str(OPUS_CHANNELS),
+            "-",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        enc = opuslib.Encoder(OPUS_SAMPLE_RATE, OPUS_CHANNELS, opuslib.APPLICATION_AUDIO)
+        try:
+            enc.bitrate = 96000
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            while True:
+                try:
+                    pcm = await asyncio.wait_for(
+                        proc.stdout.readexactly(OPUS_FRAME_BYTES), timeout=5
+                    )
+                except asyncio.IncompleteReadError as exc:
+                    if exc.partial:
+                        pcm = exc.partial + b"\x00" * (OPUS_FRAME_BYTES - len(exc.partial))
+                    else:
+                        break  # clean EOF
+                if len(pcm) < OPUS_FRAME_BYTES:
+                    pcm = pcm + b"\x00" * (OPUS_FRAME_BYTES - len(pcm))
+                try:
+                    opus = enc.encode(pcm, OPUS_FRAME_SAMPLES)
+                except Exception:  # noqa: BLE001
+                    break
+                await resp.write(opus)
+        finally:
+            if proc.returncode is None:
+                proc.terminate()
+                try:
+                    await proc.wait()
+                except Exception:  # noqa: BLE001
+                    pass
+        await resp.write_eof()
+        return resp
+
 
 def make_app(music_dir: str, auto_play: str | None) -> web.Application:
     svc = MusicService(music_dir, auto_play)
@@ -331,6 +402,7 @@ def make_app(music_dir: str, auto_play: str | None) -> web.Application:
     app.router.add_post("/stop", svc.stop_handler)
     app.router.add_get("/list", svc.list_handler)
     app.router.add_get("/file/{name}", svc.file_handler)
+    app.router.add_get("/opus_stream", svc.opus_stream_handler)
     return app
 
 

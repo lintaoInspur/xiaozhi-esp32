@@ -1,0 +1,19 @@
+# 独立调试：仅 music-service，设备直连它来调通 Opus 通道（无 AI 对话）。
+#
+# 启动： docker compose -f docker-compose.debug.yml up -d --build
+# 设备 WebSocket 指向： ws://<盒子IP>:8800/
+# 控制：
+#   curl -X POST http://<盒子IP>:8800/play -d '{"url":"/music/song.mp3","name":"测试曲"}'
+#   curl -X POST http://<盒子IP>:8800/stop
+#   curl http://<盒子IP>:8800/list
+# 或用自动播放：在命令后加  --auto-play /music/test.mp3
+
+services:
+  music-service:
+    build: .
+    image: xiaozhi-music-service
+    ports:
+      - "8800:8800"
+    volumes:
+      - ./music:/music:ro
+    restart: unless-stopped
