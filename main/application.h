@@ -126,6 +126,11 @@ public:
      */
     void ResetProtocol();
 
+    /**
+     * Stop the current music playback (called from the MCP tool / server music stop)
+     */
+    void StopMusic();
+
 private:
     Application();
     ~Application();
@@ -179,7 +184,6 @@ private:
     void HideStartupWakeWordHint();
     void StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles);
     void StopNotification();
-    void StopMusic();
     void HandleNotificationFinished(uint32_t playback_id, bool success);
 
     // Activation task (runs in background)
