@@ -364,6 +364,7 @@ class MusicService:
             enc.bitrate = 96000
         except Exception:  # noqa: BLE001
             pass
+        ts = 0
         try:
             while True:
                 try:
@@ -381,7 +382,9 @@ class MusicService:
                     opus = enc.encode(pcm, OPUS_FRAME_SAMPLES)
                 except Exception:  # noqa: BLE001
                     break
-                await resp.write(opus)
+                # BP2 帧（16 字节头 + Opus 包），桥接侧用 parseBinaryProtocol2 逐帧切分
+                await resp.write(wrap_opus(opus, ts, 2))
+                ts += OPUS_FRAME_MS
         finally:
             if proc.returncode is None:
                 proc.terminate()
