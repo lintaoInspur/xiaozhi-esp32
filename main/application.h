@@ -13,6 +13,7 @@
 #include <functional>
 #include <cstdint>
 #include <vector>
+#include <atomic>
 
 #include "protocol.h"
 #include "ota.h"
@@ -20,6 +21,8 @@
 #include "device_state.h"
 #include "device_state_machine.h"
 #include "notify/notify_player.h"
+
+class WebsocketProtocol;
 
 // Main event bits
 #define MAIN_EVENT_SCHEDULE             (1 << 0)
@@ -138,6 +141,7 @@ private:
     std::mutex mutex_;
     std::deque<std::function<void()>> main_tasks_;
     std::unique_ptr<Protocol> protocol_;
+    std::unique_ptr<WebsocketProtocol> music_protocol_;
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
     esp_timer_handle_t startup_wake_word_hint_timer_ = nullptr;
@@ -164,6 +168,9 @@ private:
     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
+    TaskHandle_t music_channel_task_handle_ = nullptr;
+    std::atomic<bool> network_connected_{false};
+    std::atomic<bool> music_channel_ready_{false};
 
 
     // Event handlers
@@ -185,9 +192,12 @@ private:
     void StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles);
     void StopNotification();
     void HandleNotificationFinished(uint32_t playback_id, bool success);
+    void HandleMusicMessage(const cJSON* root);
 
     // Activation task (runs in background)
     void ActivationTask();
+    // Music channel reconnect task (runs in background)
+    void MusicChannelTask();
 
     // Helper methods
     void CheckAssetsVersion();

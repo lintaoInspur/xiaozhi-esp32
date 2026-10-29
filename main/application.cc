@@ -117,6 +117,7 @@ void Application::Initialize() {
 
         switch (event) {
             case NetworkEvent::Scanning:
+                network_connected_ = false;
                 display->ShowNotification(Lang::Strings::SCANNING_WIFI, 30000);
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_DISCONNECTED);
                 break;
@@ -134,6 +135,7 @@ void Application::Initialize() {
                 break;
             }
             case NetworkEvent::Connected: {
+                network_connected_ = true;
                 std::string msg = Lang::Strings::CONNECTED_TO;
                 msg += data;
                 display->ShowNotification(msg.c_str(), 30000);
@@ -141,6 +143,7 @@ void Application::Initialize() {
                 break;
             }
             case NetworkEvent::Disconnected:
+                network_connected_ = false;
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_DISCONNECTED);
                 break;
             case NetworkEvent::WifiConfigModeEnter:
@@ -372,6 +375,20 @@ void Application::HandleActivationDoneEvent() {
             // Play the success sound to indicate the device is ready
             audio_service_.PlaySound(Lang::Sounds::OGG_SUCCESS);
         });
+    }
+}
+
+void Application::MusicChannelTask() {
+    while (true) {
+        if (network_connected_ && music_protocol_ != nullptr && !music_channel_ready_) {
+            ESP_LOGI(TAG, "Opening music channel");
+            // OpenAudioChannel blocks for up to 10 seconds while waiting for the
+            // server hello, which is acceptable in this dedicated task.
+            if (!music_protocol_->OpenAudioChannel()) {
+                ESP_LOGW(TAG, "Failed to open music channel, will retry");
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(15000));
     }
 }
 
@@ -666,25 +683,7 @@ void Application::InitializeProtocol() {
                 }
             }
         } else if (strcmp(type->valuestring, "music") == 0) {
-            auto state = cJSON_GetObjectItem(root, "state");
-            if (cJSON_IsString(state)) {
-                if (strcmp(state->valuestring, "start") == 0) {
-                    auto name = cJSON_GetObjectItem(root, "name");
-                    std::string title = (name && cJSON_IsString(name)) ? name->valuestring : "";
-                    Schedule([this, title]() {
-                        music_playing_ = true;
-                        music_name_ = title;
-                        aborted_ = false;
-                        SetDeviceState(kDeviceStateSpeaking);
-                        auto* display = Board::GetInstance().GetDisplay();
-                        if (display != nullptr && !music_name_.empty()) {
-                            display->SetChatMessage("assistant", music_name_.c_str());
-                        }
-                    });
-                } else if (strcmp(state->valuestring, "stop") == 0) {
-                    Schedule([this]() { StopMusic(); });
-                }
-            }
+            HandleMusicMessage(root);
         } else if (strcmp(type->valuestring, "stt") == 0) {
             auto text = cJSON_GetObjectItem(root, "text");
             if (cJSON_IsString(text)) {
@@ -755,7 +754,62 @@ void Application::InitializeProtocol() {
         }
     });
 
+    // Second WebSocket connection dedicated to local music playback.
+    {
+        Settings music_settings("music", false);
+        if (music_settings.GetString("url").empty()) {
+            music_settings.SetString("url", CONFIG_MUSIC_SERVER_URL);
+            music_settings.SetInt("version", 2);
+        }
+    }
+
+    music_protocol_ = std::make_unique<WebsocketProtocol>("music");
+
+    music_protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
+        if (GetDeviceState() == kDeviceStateSpeaking) {
+            audio_service_.PushPacketToDecodeQueue(std::move(packet));
+        }
+    });
+
+    music_protocol_->OnIncomingJson([this](const cJSON* root) {
+        auto type = cJSON_GetObjectItem(root, "type");
+        if (cJSON_IsString(type) && strcmp(type->valuestring, "music") == 0) {
+            HandleMusicMessage(root);
+        }
+    });
+
+    music_protocol_->OnAudioChannelOpened([this, codec, &board]() {
+        music_channel_ready_ = true;
+        Schedule([this, codec, &board]() {
+            board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+            if (music_protocol_ != nullptr &&
+                music_protocol_->server_sample_rate() != codec->output_sample_rate()) {
+                ESP_LOGW(TAG,
+                         "Music sample rate %d does not match device output sample rate %d, "
+                         "resampling may cause distortion",
+                         music_protocol_->server_sample_rate(), codec->output_sample_rate());
+            }
+        });
+    });
+
+    music_protocol_->OnAudioChannelClosed([this]() {
+        music_channel_ready_ = false;
+        Schedule([this]() {
+            if (music_playing_) {
+                StopMusic();
+            }
+        });
+    });
+
     protocol_->Start();
+
+    if (music_channel_task_handle_ == nullptr) {
+        xTaskCreate(
+            [](void* arg) {
+                static_cast<Application*>(arg)->MusicChannelTask();
+            },
+            "music_channel", 6144, this, 4, &music_channel_task_handle_);
+    }
 }
 
 void Application::ShowActivationCode(const std::string& code, const std::string& message) {
@@ -1265,6 +1319,31 @@ void Application::StopMusic() {
     audio_service_.ResetDecoder();
     if (GetDeviceState() == kDeviceStateSpeaking) {
         SetDeviceState(kDeviceStateIdle);
+    }
+}
+
+void Application::HandleMusicMessage(const cJSON* root) {
+    // Called from the protocol receive task; all UI/state changes are scheduled
+    // on the main task.
+    auto state = cJSON_GetObjectItem(root, "state");
+    if (!cJSON_IsString(state)) {
+        return;
+    }
+    if (strcmp(state->valuestring, "start") == 0) {
+        auto name = cJSON_GetObjectItem(root, "name");
+        std::string title = (name && cJSON_IsString(name)) ? name->valuestring : "";
+        Schedule([this, title]() {
+            music_playing_ = true;
+            music_name_ = title;
+            aborted_ = false;
+            SetDeviceState(kDeviceStateSpeaking);
+            auto* display = Board::GetInstance().GetDisplay();
+            if (display != nullptr && !music_name_.empty()) {
+                display->SetChatMessage("assistant", music_name_.c_str());
+            }
+        });
+    } else if (strcmp(state->valuestring, "stop") == 0) {
+        Schedule([this]() { StopMusic(); });
     }
 }
 

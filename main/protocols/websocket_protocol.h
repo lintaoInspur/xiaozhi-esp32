@@ -12,7 +12,7 @@
 
 class WebsocketProtocol : public Protocol {
 public:
-    WebsocketProtocol();
+    WebsocketProtocol(const char* settings_namespace = "websocket");
     ~WebsocketProtocol();
 
     bool Start() override;
@@ -24,6 +24,7 @@ public:
 private:
     EventGroupHandle_t event_group_handle_;
     std::shared_ptr<WebSocket> websocket_;
+    std::string settings_namespace_;
     int version_ = 1;
 
     void ParseServerHello(const cJSON* root);

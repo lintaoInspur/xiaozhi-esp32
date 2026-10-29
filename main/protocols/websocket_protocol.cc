@@ -12,7 +12,10 @@
 
 #define TAG "WS"
 
-WebsocketProtocol::WebsocketProtocol() { event_group_handle_ = xEventGroupCreate(); }
+WebsocketProtocol::WebsocketProtocol(const char* settings_namespace)
+    : settings_namespace_(settings_namespace) {
+    event_group_handle_ = xEventGroupCreate();
+}
 
 WebsocketProtocol::~WebsocketProtocol() { vEventGroupDelete(event_group_handle_); }
 
@@ -77,7 +80,7 @@ void WebsocketProtocol::CloseAudioChannel(bool send_goodbye) {
 }
 
 bool WebsocketProtocol::OpenAudioChannel() {
-    Settings settings("websocket", false);
+    Settings settings(settings_namespace_, false);
     std::string url = settings.GetString("url");
     std::string token = settings.GetString("token");
     int version = settings.GetInt("version");
