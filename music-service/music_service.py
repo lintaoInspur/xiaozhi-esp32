@@ -135,15 +135,16 @@ class MusicService:
             )
         )
 
+        # The device connects this socket solely for music, so the audio channel
+        # is usable as soon as the handshake completes (no binary probe needed).
+        dev.channel_open = True
+
         try:
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.BINARY:
-                    # The device only sends binary once its audio channel is open.
-                    if not dev.channel_open:
-                        dev.channel_open = True
-                        LOG.info("device audio channel open")
-                        if self.auto_play and (self._play_task is None or self._play_task.done()):
-                            asyncio.create_task(self.play(self.auto_play, "auto-play"))
+                    # Kept for compatibility: the device may send a probe packet.
+                    if self.auto_play and (self._play_task is None or self._play_task.done()):
+                        asyncio.create_task(self.play(self.auto_play, "auto-play"))
                 # TEXT (stt/abort/...) and other messages are ignored here.
         finally:
             self.devices.discard(dev)
@@ -288,7 +289,11 @@ class MusicService:
         return web.json_response({"status": "stopped"})
 
     async def list_handler(self, request: web.Request) -> web.Response:
-        files = sorted(p.name for p in self.music_dir.iterdir() if p.is_file())
+        files = sorted(
+            p.relative_to(self.music_dir).as_posix()
+            for p in self.music_dir.rglob("*")
+            if p.is_file()
+        )
         return web.json_response({"files": files, "music_dir": str(self.music_dir)})
 
     async def file_handler(self, request: web.Request) -> web.Response:
@@ -404,7 +409,7 @@ def make_app(music_dir: str, auto_play: str | None) -> web.Application:
     app.router.add_post("/play", svc.play_handler)
     app.router.add_post("/stop", svc.stop_handler)
     app.router.add_get("/list", svc.list_handler)
-    app.router.add_get("/file/{name}", svc.file_handler)
+    app.router.add_get("/file/{name:.*}", svc.file_handler)
     app.router.add_get("/opus_stream", svc.opus_stream_handler)
     return app
 
