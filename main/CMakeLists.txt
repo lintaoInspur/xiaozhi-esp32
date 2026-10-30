@@ -33,6 +33,7 @@ set(SOURCES "audio/audio_codec.cc"
             "protocols/text_glyph_payload.cc"
             "protocols/mqtt_protocol.cc"
             "protocols/websocket_protocol.cc"
+            "protocols/server_discovery.cc"
             "mcp_server.cc"
             "system_info.cc"
             "application.cc"
@@ -1131,6 +1132,7 @@ idf_component_register(SRCS ${SOURCES}
                         esp_pm
                         esp_psram
                         esp_netif
+                        mdns
                         esp_eth
                         esp_driver_gpio
                         esp_driver_uart

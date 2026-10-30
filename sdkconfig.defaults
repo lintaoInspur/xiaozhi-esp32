@@ -76,3 +76,6 @@ CONFIG_LV_USE_WIN=n
 
 CONFIG_LV_BUILD_EXAMPLES=n
 CONFIG_LV_BUILD_DEMOS=n
+
+# 局域网零配置：开启 mDNS，使设备可自动发现服务端（无需手动填写 IP）
+CONFIG_MDNS=y

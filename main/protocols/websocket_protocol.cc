@@ -1,6 +1,7 @@
 #include "websocket_protocol.h"
 #include "application.h"
 #include "board.h"
+#include "server_discovery.h"
 #include "settings.h"
 #include "system_info.h"
 
@@ -93,6 +94,30 @@ bool WebsocketProtocol::OpenAudioChannel() {
     }
 
     error_occurred_ = false;
+
+    // 局域网零配置：优先通过 mDNS 自动发现服务端，发现不到再退回已配置地址。
+    // 这样换到任意局域网，只要设备和盒子接入同一网络即可自动连接，无需重配。
+    // 若已配置 URL 中带有路径（如 /ws），则沿用该路径；否则使用 mDNS TXT 的 path。
+    {
+        std::string host;
+        uint16_t port = 0;
+        std::string txt_path;
+        if (xiaozhi::DiscoverXiaozhiServer(host, port, txt_path) && !host.empty() && port != 0) {
+            std::string cfg_path;
+            auto scheme_end = url.find("://");
+            if (scheme_end != std::string::npos) {
+                auto p = url.find('/', scheme_end + 3);
+                if (p != std::string::npos) {
+                    cfg_path = url.substr(p);
+                }
+            }
+            const std::string& path = cfg_path.empty() ? txt_path : cfg_path;
+            std::string discovered = "ws://" + host + ":" + std::to_string(port) + path;
+            ESP_LOGI(TAG, "Using mDNS-discovered server %s (configured: %s)", discovered.c_str(),
+                     url.c_str());
+            url = discovered;
+        }
+    }
 
     auto network = Board::GetInstance().GetNetwork();
     websocket_ = network->CreateWebSocket(1);

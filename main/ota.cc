@@ -1,6 +1,7 @@
 #include "ota.h"
 #include "system_info.h"
 #include "settings.h"
+#include "server_discovery.h"
 #include "assets/lang_config.h"
 
 #include <freertos/FreeRTOS.h>
@@ -57,6 +58,14 @@ std::string Ota::GetCheckVersionUrl() {
     Settings settings("wifi", false);
     std::string url = settings.GetString("ota_url");
     if (url.empty()) {
+        // 局域网零配置：若已通过 mDNS 发现本地服务端，则直接用它做 OTA，
+        // 否则退回默认的云端 OTA 地址。
+        std::string host;
+        uint16_t port = 0;
+        std::string txt_path;
+        if (xiaozhi::DiscoverXiaozhiServer(host, port, txt_path) && !host.empty() && port != 0) {
+            return "http://" + host + ":" + std::to_string(port) + "/xiaozhi/ota/";
+        }
         url = CONFIG_OTA_URL;
     }
     return url;
