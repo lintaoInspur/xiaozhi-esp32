@@ -84,7 +84,11 @@ def merge_bin(preview: bool = False) -> None:
 
 
 def zip_bin(name: str, version: str) -> None:
-    """Zip build/merged-binary.bin to releases/v{version}_{name}.zip"""
+    """Zip build/merged-binary.bin and build/xiaozhi.bin to releases/v{version}_{name}.zip
+
+    The merged image is for esptool initial flashing; xiaozhi.bin is the OTA
+    application image consumed by the internal OTA server (ota-server.py).
+    """
     out_dir = Path("releases")
     out_dir.mkdir(exist_ok=True)
     output_path = out_dir / f"v{version}_{name}.zip"
@@ -94,6 +98,7 @@ def zip_bin(name: str, version: str) -> None:
 
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zipf:
         zipf.write("build/merged-binary.bin", arcname="merged-binary.bin")
+        zipf.write("build/xiaozhi.bin", arcname="xiaozhi.bin")
     print(f"zip bin to {output_path} done")
 
 
