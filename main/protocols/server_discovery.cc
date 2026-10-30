@@ -94,7 +94,7 @@ bool DiscoverXiaozhiServer(std::string& host, uint16_t& port, std::string& txt_p
         continue;  // 仅使用 IPv4
       }
       char ip_str[IP4ADDR_STRLEN_MAX] = {0};
-      ipaddr_ntoa_r(&a->addr, ip_str, sizeof(ip_str));
+      ip4addr_ntoa_r((const ip4_addr_t*)&a->addr.u_addr.ip4, ip_str, sizeof(ip_str));
       if (ip_str[0] == '\0') {
         continue;
       }
