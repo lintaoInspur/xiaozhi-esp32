@@ -1,6 +1,7 @@
 #include "server_discovery.h"
 
 #include <esp_err.h>
+#include <esp_log.h>
 #include <lwip/ip4_addr.h>
 #include <mdns.h>
 
@@ -14,6 +15,8 @@ static const char* kServiceName = "_xiaozhi";
 static const char* kServiceProto = "_tcp";
 // 查询超时（毫秒）
 static constexpr uint32_t kQueryTimeoutMs = 2000;
+// 最多返回的结果数
+static constexpr size_t kMaxResults = 8;
 // 默认 websocket 路径
 static const char* kDefaultPath = "/ws";
 
@@ -56,7 +59,7 @@ bool DiscoverXiaozhiServer(std::string& host, uint16_t& port, std::string& txt_p
   }
 
   mdns_result_t* results = nullptr;
-  esp_err_t err = mdns_query(kServiceName, kServiceProto, kQueryTimeoutMs, &results);
+  esp_err_t err = mdns_query_ptr(kServiceName, kServiceProto, kQueryTimeoutMs, kMaxResults, &results);
   if (err != ESP_OK) {
     ESP_LOGW(TAG, "mdns_query failed: %s", esp_err_to_name(err));
     return GetCachedServer(host, port, txt_path);
@@ -68,11 +71,9 @@ bool DiscoverXiaozhiServer(std::string& host, uint16_t& port, std::string& txt_p
 
   bool found = false;
   for (mdns_result_t* r = results; r != nullptr; r = r->next) {
-    if (r->addr.type != MDNS_IP_PROTOCOL_V4 || r->port == 0) {
-      continue;  // 仅使用 IPv4；无端口的实例跳过
+    if (r->port == 0) {
+      continue;  // 无端口的实例跳过
     }
-    char ip_str[IP4ADDR_STRLEN_MAX] = {0};
-    ip4addr_ntoa_r(&r->addr.ip4, ip_str, sizeof(ip_str));
 
     // 解析 TXT 中的 path（默认 /ws）
     std::string path = kDefaultPath;
@@ -86,13 +87,28 @@ bool DiscoverXiaozhiServer(std::string& host, uint16_t& port, std::string& txt_p
       }
     }
 
-    s_host = ip_str;
-    s_port = r->port;
-    s_txt_path = path;
-    s_cached_valid = true;
-    found = true;
-    ESP_LOGI(TAG, "discovered xiaozhi server: http://%s:%u%s", ip_str, r->port, path.c_str());
-    break;
+    // addr 是链表头指针，遍历取第一个 IPv4 地址
+    for (mdns_ip_addr_t* a = r->addr; a != nullptr; a = a->next) {
+      if (a->addr.type != ESP_IP_ADDR_TYPE_V4) {
+        continue;  // 仅使用 IPv4
+      }
+      char ip_str[IP4ADDR_STRLEN_MAX] = {0};
+      ip4addr_ntoa_r(&a->addr.ip4, ip_str, sizeof(ip_str));
+      if (ip_str[0] == '\0') {
+        continue;
+      }
+
+      s_host = ip_str;
+      s_port = r->port;
+      s_txt_path = path;
+      s_cached_valid = true;
+      found = true;
+      ESP_LOGI(TAG, "discovered xiaozhi server: http://%s:%u%s", ip_str, r->port, path.c_str());
+      break;
+    }
+    if (found) {
+      break;
+    }
   }
 
   mdns_query_results_free(results);
