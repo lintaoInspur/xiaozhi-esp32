@@ -8,11 +8,9 @@ config OTA_URL
 
 config MUSIC_SERVER_URL
     string "Music server WebSocket URL (second connection)"
-    default ""
+    default "ws://192.168.1.6:8800/"
     help
         Second WebSocket connection used only for local music playback (music-service).
-        Leave empty to disable the built-in music server by default; set it here or via
-        the NVS "music" namespace (key "url") to point at your music-service instance.
 
 choice
     prompt "Flash Assets"
