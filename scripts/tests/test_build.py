@@ -1856,6 +1856,7 @@ class ZipTests(unittest.TestCase):
                 os.chdir(temp_dir)
                 Path("build").mkdir()
                 Path("build/merged-binary.bin").write_bytes(b"new firmware")
+                Path("build/xiaozhi.bin").write_bytes(b"new ota firmware")
                 Path("releases").mkdir()
                 output = Path("releases/v1.2.3_test-board.zip")
                 output.write_bytes(b"stale zip")
@@ -1866,6 +1867,11 @@ class ZipTests(unittest.TestCase):
                     self.assertEqual(
                         archive.read("merged-binary.bin"),
                         b"new firmware",
+                    )
+                    # 提交 52aafa2 起，release zip 同时打包 OTA 应用镜像 xiaozhi.bin
+                    self.assertEqual(
+                        archive.read("xiaozhi.bin"),
+                        b"new ota firmware",
                     )
         finally:
             os.chdir(previous_cwd)
