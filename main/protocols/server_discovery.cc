@@ -2,6 +2,7 @@
 
 #include <esp_err.h>
 #include <esp_log.h>
+#include <lwip/ip_addr.h>
 #include <lwip/ip4_addr.h>
 #include <mdns.h>
 
@@ -89,11 +90,11 @@ bool DiscoverXiaozhiServer(std::string& host, uint16_t& port, std::string& txt_p
 
     // addr 是链表头指针，遍历取第一个 IPv4 地址
     for (mdns_ip_addr_t* a = r->addr; a != nullptr; a = a->next) {
-      if (a->addr.type != ESP_IP_ADDR_TYPE_V4) {
+      if (a->addr.type != ESP_IPADDR_TYPE_V4) {
         continue;  // 仅使用 IPv4
       }
       char ip_str[IP4ADDR_STRLEN_MAX] = {0};
-      ip4addr_ntoa_r(&a->addr.ip4, ip_str, sizeof(ip_str));
+      ipaddr_ntoa_r(&a->addr, ip_str, sizeof(ip_str));
       if (ip_str[0] == '\0') {
         continue;
       }
