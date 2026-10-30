@@ -70,6 +70,10 @@ bool WebsocketProtocol::SendText(const std::string& text) {
     return true;
 }
 
+bool WebsocketProtocol::SendJson(const std::string& json) {
+    return SendText(json);
+}
+
 bool WebsocketProtocol::IsAudioChannelOpened() const {
     return websocket_ != nullptr && websocket_->IsConnected() && !error_occurred_ && !IsTimeout();
 }

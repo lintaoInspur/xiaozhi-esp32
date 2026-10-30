@@ -582,7 +582,8 @@ void Application::InitializeProtocol() {
     });
 
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
-        if (GetDeviceState() == kDeviceStateSpeaking) {
+        // While local music is playing, the cloud TTS must not be mixed in.
+        if (GetDeviceState() == kDeviceStateSpeaking && !music_playing_) {
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         }
     });
@@ -766,7 +767,9 @@ void Application::InitializeProtocol() {
     music_protocol_ = std::make_unique<WebsocketProtocol>("music");
 
     music_protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
-        if (GetDeviceState() == kDeviceStateSpeaking) {
+        // Only feed the decoder while music is actually playing; the cloud TTS
+        // path uses the same Speaking state, so gate on music_playing_ too.
+        if (music_playing_) {
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         }
     });
@@ -900,7 +903,11 @@ void Application::HandleToggleChatEvent() {
         }
         SetListeningMode(mode);
     } else if (state == kDeviceStateSpeaking) {
-        AbortSpeaking(kAbortReasonNone);
+        if (music_playing_) {
+            StopMusic();
+        } else {
+            AbortSpeaking(kAbortReasonNone);
+        }
     } else if (state == kDeviceStateListening) {
         protocol_->CloseAudioChannel();
     }
@@ -996,7 +1003,13 @@ void Application::HandleWakeWordDetectedEvent() {
         StopNotification();
         BeginWakeWordInvoke(wake_word);
     } else if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
-        AbortSpeaking(kAbortReasonWakeWordDetected);
+        if (music_playing_) {
+            // Interrupting local music playback: stop it and start a fresh
+            // conversation instead of aborting the (non-existent) cloud TTS.
+            StopMusic();
+        } else {
+            AbortSpeaking(kAbortReasonWakeWordDetected);
+        }
         // Clear send queue to avoid sending residues to server
         while (audio_service_.PopPacketFromSendQueue())
             ;
@@ -1315,6 +1328,11 @@ void Application::StopMusic() {
         return;
     }
     music_playing_ = false;
+    // Tell the music server to stop streaming so it does not resume when the
+    // channel is re-opened by MusicChannelTask.
+    if (music_protocol_ != nullptr) {
+        music_protocol_->SendJson("{\"type\":\"music\",\"state\":\"stop\"}");
+    }
     // Discard any buffered audio so playback stops promptly.
     audio_service_.ResetDecoder();
     if (GetDeviceState() == kDeviceStateSpeaking) {
@@ -1333,6 +1351,11 @@ void Application::HandleMusicMessage(const cJSON* root) {
         auto name = cJSON_GetObjectItem(root, "name");
         std::string title = (name && cJSON_IsString(name)) ? name->valuestring : "";
         Schedule([this, title]() {
+            // If a track is already playing (e.g. switching songs), flush the
+            // decoder first so the old and new audio do not overlap.
+            if (music_playing_) {
+                audio_service_.ResetDecoder();
+            }
             music_playing_ = true;
             music_name_ = title;
             aborted_ = false;

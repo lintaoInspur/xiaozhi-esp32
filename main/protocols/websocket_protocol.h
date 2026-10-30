@@ -20,6 +20,8 @@ public:
     bool OpenAudioChannel() override;
     void CloseAudioChannel(bool send_goodbye = true) override;
     bool IsAudioChannelOpened() const override;
+    // Send an arbitrary JSON text frame to the server (e.g. a music stop command).
+    bool SendJson(const std::string& json);
 
 private:
     EventGroupHandle_t event_group_handle_;

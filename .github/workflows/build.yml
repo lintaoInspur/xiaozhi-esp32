@@ -95,7 +95,14 @@ jobs:
           if [[ "$BUILD_OPTIONS_JSON" != "null" && -n "$BUILD_OPTIONS_JSON" ]]; then
             OPTIONS+=(--build-options-json "$BUILD_OPTIONS_JSON")
           fi
-          python scripts/build.py "$BOARD" --name "$VARIANT" "${OPTIONS[@]}"
+          # Pin the wake word to 你好小智 (nihaoxiaozhi) for the bread-compact-wifi
+          # board family. Other boards keep their language-based default so we don't
+          # force a Chinese wake word (or break boards that disable wake words).
+          WAKE_WORD=()
+          if [[ "$BOARD" == "bread-compact-wifi" ]]; then
+            WAKE_WORD=(--wake-word nihaoxiaozhi)
+          fi
+          python scripts/build.py "$BOARD" --name "$VARIANT" "${OPTIONS[@]}" "${WAKE_WORD[@]}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7

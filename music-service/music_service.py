@@ -21,10 +21,12 @@ triggered. For standalone debugging, wake the device / press talk (opens the
 channel) and then call ``/play``.
 
 HTTP control API:
-    POST /play   {"url": "<file-or-http-url>", "name": "<title>"}   start streaming
-    POST /stop                                                    stop playback
-    GET  /list                                                    list local library
-    GET  /file/<name>                                             stream a local file (Range)
+    POST /play   {"url": "<file-or-http-url>", "name": "<title>"}          play one track once
+    POST /play   {"url": "...", "loop": "one"}                            single-track loop
+    POST /play   {"tracks": [{"url","name"}, ...], "loop": "all"}          loop a set of tracks
+    POST /stop                                                            stop playback
+    GET  /list                                                            list local library
+    GET  /file/<name>                                                     stream a local file (Range)
 
 WebSocket:
     The device connects with its standard hello; this service answers with a
@@ -34,6 +36,10 @@ WebSocket:
 Example:
     python music_service.py --host 0.0.0.0 --port 8800 --music-dir /music
     curl -X POST localhost:8800/play -d '{"url":"/music/song.mp3","name":"Song"}'
+    # single-track loop (repeat one song forever)
+    curl -X POST localhost:8800/play -d '{"url":"/music/song.mp3","loop":"one"}'
+    # loop a fixed set of songs (2, 3, ... songs cycling)
+    curl -X POST localhost:8800/play -d '{"tracks":[{"url":"/music/a.mp3"},{"url":"/music/b.mp3"}],"loop":"all"}'
 
 Debug auto-play (no HTTP needed): the service starts playing the given source as
 soon as the device opens its audio channel:
@@ -97,6 +103,9 @@ class MusicService:
         self.devices: set[Device] = set()
         self._play_task: asyncio.Task | None = None
         self._stop = asyncio.Event()
+        self._playlist: list[tuple[str, str]] = []
+        self._play_index = 0
+        self._loop = "off"  # "off" | "one" | "all"
 
     # ----- device connection ------------------------------------------------
     async def ws_handler(self, request: web.Request) -> web.WebSocketResponse:
@@ -145,19 +154,54 @@ class MusicService:
                     # Kept for compatibility: the device may send a probe packet.
                     if self.auto_play and (self._play_task is None or self._play_task.done()):
                         asyncio.create_task(self.play(self.auto_play, "auto-play"))
-                # TEXT (stt/abort/...) and other messages are ignored here.
+                elif msg.type == aiohttp.WSMsgType.TEXT:
+                    # The device asks the server to stop streaming, e.g. when the
+                    # user interrupts local playback with the wake word or a button.
+                    try:
+                        cmd = json.loads(msg.data)
+                    except (ValueError, TypeError):
+                        continue
+                    if cmd.get("type") == "music" and cmd.get("state") == "stop":
+                        LOG.info("device requested music stop")
+                        await self.stop()
         finally:
             self.devices.discard(dev)
             LOG.info("device disconnected (%d total)", len(self.devices))
         return ws
 
     # ----- playback control -------------------------------------------------
-    async def play(self, url: str, name: str) -> None:
+    async def play(
+        self,
+        url: str | None = None,
+        name: str = "",
+        tracks: list | None = None,
+        loop: str = "off",
+    ) -> None:
+        """Start playback.
+
+        ``loop`` controls repetition:
+          - "off": play the (single or list of) track(s) once, then stop.
+          - "one": repeat the currently-playing track forever (single-track loop).
+          - "all": cycle through the given tracks forever (loop a set of 2, 3, ...).
+        """
+        if tracks:
+            self._playlist = [
+                (t.get("url"), t.get("name", "")) for t in tracks if t.get("url")
+            ]
+        elif url:
+            self._playlist = [(url, name)]
+        else:
+            return
+        if not self._playlist:
+            return
+        self._play_index = 0
+        self._loop = loop if loop in ("one", "all", "off") else "off"
+
         if self._play_task is not None and not self._play_task.done():
             await self.stop()
             await asyncio.sleep(0.1)
         self._stop.clear()
-        self._play_task = asyncio.create_task(self._stream(url, name))
+        self._play_task = asyncio.create_task(self._play_loop())
 
     async def stop(self) -> None:
         self._stop.set()
@@ -166,6 +210,37 @@ class MusicService:
                 await asyncio.wait_for(self._play_task, timeout=5)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 self._play_task.cancel()
+
+    async def _play_loop(self) -> None:
+        """Iterate the playlist according to ``self._loop``.
+
+        A ``music stop`` is only sent when playback truly ends (loop "off" finishing
+        the last track, or an external stop). Between loop iterations no stop is
+        sent, so the device keeps playing without re-triggering its own stop logic.
+        """
+        try:
+            while True:
+                if not self._playlist:
+                    break
+                if self._play_index >= len(self._playlist):
+                    if self._loop == "all":
+                        self._play_index = 0
+                    else:
+                        break
+                url, name = self._playlist[self._play_index]
+                final = self._loop == "off" and self._play_index == len(self._playlist) - 1
+                await self._stream(url, name, final=final)
+                if self._stop.is_set():
+                    break
+                if self._loop == "one":
+                    pass  # repeat the current track
+                elif self._loop == "all":
+                    self._play_index = (self._play_index + 1) % len(self._playlist)
+                else:  # "off"
+                    self._play_index += 1
+        finally:
+            if self._stop.is_set():
+                await self._broadcast(music_stop_json())
 
     async def _wait_for_channel(self, timeout: float = 4.0) -> bool:
         """Best-effort wait until at least one device has an open audio channel."""
@@ -176,7 +251,9 @@ class MusicService:
             await asyncio.sleep(0.1)
         return any(d.channel_open for d in self.devices)
 
-    async def _stream(self, url: str, name: str) -> None:
+    async def _stream(self, url: str, name: str, final: bool = True) -> None:
+        if self._stop.is_set():
+            return
         src = self._resolve_source(url)
         if src is None:
             LOG.error("cannot resolve source: %s", url)
@@ -246,8 +323,9 @@ class MusicService:
                     await proc.wait()
                 except Exception:  # noqa: BLE001
                     pass
-            await self._broadcast(music_stop_json())
-            LOG.info("streamed %d frames from %s", sent, src)
+            if final:
+                await self._broadcast(music_stop_json())
+            LOG.info("streamed %d frames from %s (final=%s)", sent, src, final)
 
     # ----- helpers ----------------------------------------------------------
     async def _broadcast(self, text: str) -> None:
@@ -279,10 +357,20 @@ class MusicService:
             return web.json_response({"error": "invalid json"}, status=400)
         url = data.get("url")
         name = data.get("name", "")
+        tracks = data.get("tracks") or []
+        loop = data.get("loop", "off")
+        if tracks:
+            valid = [t for t in tracks if isinstance(t, dict) and t.get("url")]
+            if not valid:
+                return web.json_response({"error": "missing url in tracks"}, status=400)
+            asyncio.create_task(self.play(tracks=valid, loop=loop))
+            return web.json_response(
+                {"status": "playing", "tracks": len(valid), "loop": loop}
+            )
         if not url:
             return web.json_response({"error": "missing url"}, status=400)
-        asyncio.create_task(self.play(url, name))
-        return web.json_response({"status": "playing", "url": url, "name": name})
+        asyncio.create_task(self.play(url=url, name=name, loop=loop))
+        return web.json_response({"status": "playing", "url": url, "name": name, "loop": loop})
 
     async def stop_handler(self, request: web.Request) -> web.Response:
         await self.stop()
@@ -293,6 +381,7 @@ class MusicService:
             p.relative_to(self.music_dir).as_posix()
             for p in self.music_dir.rglob("*")
             if p.is_file()
+            and not any(part.startswith(".") for part in p.relative_to(self.music_dir).parts)
         )
         return web.json_response({"files": files, "music_dir": str(self.music_dir)})
 
